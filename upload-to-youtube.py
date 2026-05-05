@@ -167,14 +167,18 @@ def upload_video(youtube):
     response = None
     retry_count = 0
     max_retries = 10
+    last_logged_pct = -1
 
     while response is None:
         try:
             status, response = request.next_chunk()
             if status:
                 pct = int(status.progress() * 100)
-                bar = ('█' * (pct // 5)).ljust(20)
-                print(f"\r  [{bar}] {pct}%", end='', flush=True)
+                pct_rounded = pct // 10 * 10
+                if pct_rounded > last_logged_pct:
+                    last_logged_pct = pct_rounded
+                    bar = ('#' * (pct_rounded // 5)).ljust(20)
+                    print(f"\r  [{bar}] {pct_rounded}%", end='', flush=True)
         except googleapiclient.errors.HttpError as e:
             if e.resp.status in (500, 502, 503, 504) and retry_count < max_retries:
                 wait = 2 ** retry_count

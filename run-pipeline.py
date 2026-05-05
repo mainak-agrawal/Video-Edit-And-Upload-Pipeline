@@ -28,23 +28,23 @@ STEPS = [
         'name':        'Step 1 — Merge Videos',
         'description': 'Joins 1.mp4, 2.mp4, and 3.mp4 with crossfade transitions '
                        'and produces final_output.mp4',
-        'script':      os.path.join(SCRIPT_DIR, 'merge_videos.py'),
-        'next':        'extract_thumbnail.py will extract a high-quality frame '
+        'script':      os.path.join(SCRIPT_DIR, 'merge-videos.py'),
+        'next':        'extract-thumbnail.py will extract a high-quality frame '
                        'from 1.mp4 as the YouTube thumbnail.',
     },
     {
         'name':        'Step 2 — Extract Thumbnail',
         'description': 'Extracts a frame near the end of 1.mp4 (when the title '
                        'animation is fully rendered) and saves it as thumbnail.png',
-        'script':      os.path.join(SCRIPT_DIR, 'extract_thumbnail.py'),
-        'next':        'upload_to_youtube.py will upload final_output.mp4 with '
+        'script':      os.path.join(SCRIPT_DIR, 'extract-thumbnail.py'),
+        'next':        'upload-to-youtube.py will upload final_output.mp4 with '
                        'thumbnail.png to YouTube as a private video.',
     },
     {
         'name':        'Step 3 — Upload to YouTube',
         'description': 'Uploads final_output.mp4 as a private YouTube video and '
                        'sets thumbnail.png as its thumbnail',
-        'script':      os.path.join(SCRIPT_DIR, 'upload_to_youtube.py'),
+        'script':      os.path.join(SCRIPT_DIR, 'upload-to-youtube.py'),
         'next':        None,   # last step
     },
 ]

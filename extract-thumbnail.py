@@ -1,3 +1,4 @@
+import os
 import subprocess
 import json
 
@@ -18,6 +19,11 @@ def get_info(path):
 
 
 def main():
+    if not os.path.exists('1.mp4'):
+        raise FileNotFoundError(
+            "'1.mp4' not found. Place the input video in the same folder as this script."
+        )
+
     info = get_info('1.mp4')
     duration = info['duration']
     fps = info['fps']

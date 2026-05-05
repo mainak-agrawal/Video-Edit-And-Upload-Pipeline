@@ -20,12 +20,36 @@ def get_info(path):
     }
 
 
+TEMP_FILES = [
+    'part1_body.mp4', 'p1_tail.mp4',
+    'p2_head.mp4', 'part2_body.mp4', 'p2_tail.mp4',
+    'p2_bridge.mp4', 'p2_bulk.mp4', 'p2_tail_bridge.mp4',
+    'p3_head.mp4', 'part3_body.mp4',
+    'trans_a.mp4', 'trans_b.mp4',
+    'concat_list.txt', 'body2_concat.txt',
+    'final_concat_raw.mp4',
+]
+
+
+def cleanup():
+    for f in TEMP_FILES:
+        if os.path.exists(f):
+            os.remove(f)
+
+
 def run(cmd):
     print('Running:', ' '.join(str(c) for c in cmd))
     subprocess.run([str(c) for c in cmd], check=True)
 
 
 def main():
+    missing = [f for f in ('1.mp4', '2.mp4', '3.mp4') if not os.path.exists(f)]
+    if missing:
+        raise FileNotFoundError(
+            f"Missing input file(s): {', '.join(missing)}. "
+            "Place all three video files in the same folder as this script."
+        )
+
     info1 = get_info('1.mp4')
     info2 = get_info('2.mp4')
     info3 = get_info('3.mp4')
@@ -379,22 +403,8 @@ def main():
     #      '-movflags', '+faststart',
     #      'final_output.mp4'])
 
-    if os.path.exists('final_concat_raw.mp4'):
-        os.remove('final_concat_raw.mp4')
-
     print("\n--- Cleanup ---")
-    temp_files = [
-        'part1_body.mp4', 'p1_tail.mp4',
-        'p2_head.mp4', 'part2_body.mp4', 'p2_tail.mp4',
-        'p2_bridge.mp4', 'p2_bulk.mp4', 'p2_tail_bridge.mp4',
-        'p3_head.mp4', 'part3_body.mp4',
-        'trans_a.mp4', 'trans_b.mp4',
-        'concat_list.txt', 'body2_concat.txt',
-        'final_concat_raw.mp4',
-    ]
-    for f in temp_files:
-        if os.path.exists(f):
-            os.remove(f)
+    cleanup()
 
     print("\nDone!  Output: final_output.mp4")
     result = subprocess.check_output(
@@ -405,4 +415,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (Exception, KeyboardInterrupt):
+        print("\nAn error occurred. Cleaning up temporary files ...")
+        cleanup()
+        raise
