@@ -1,0 +1,53 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          allow-prereleases: true
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build executable
+        run: python build.py
+
+      - name: Zip distribution
+        run: Compress-Archive -Path dist/VideoEditPipeline/* -DestinationPath dist/VideoEditPipeline.zip
+
+      - name: Generate version tag
+        id: version
+        run: |
+          $tag = "v$(Get-Date -Format 'yyyy.MM.dd')-$(git rev-parse --short HEAD)"
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "Version: $tag"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "Build ${{ steps.version.outputs.tag }}"
+          body: |
+            Automated build from commit ${{ github.sha }}.
+            
+            **Download `VideoEditPipeline.zip`**, extract, and place `client_secrets.json` in the same folder as the exe.
+            
+            Requires `ffmpeg` and `ffprobe` on PATH.
+          files: dist/VideoEditPipeline.zip
+          generate_release_notes: true

@@ -76,5 +76,12 @@ desktop.ini
 *~
 
 # Video/media temp files
+*.mp4
 *.tmp
 *.temp
+thumbnail.png
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec

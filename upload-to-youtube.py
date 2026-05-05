@@ -123,13 +123,16 @@ def upload_video(youtube):
     file_size_mb = os.path.getsize(VIDEO_FILE) / (1024 * 1024)
     print(f"\nUploading '{VIDEO_FILE}'  ({file_size_mb:.1f} MB) ...")
 
-    # Derive title from the folder containing this script unless overridden.
-    if TITLE_OVERRIDE:
+    # Derive title: env var > TITLE_OVERRIDE > folder name (fallback).
+    env_title = os.environ.get('PIPELINE_TITLE', '').strip()
+    if env_title:
+        title = env_title
+    elif TITLE_OVERRIDE:
         title = TITLE_OVERRIDE
     else:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         title = os.path.basename(script_dir)
-    print(f"  Title (from folder name): {title!r}")
+    print(f"  Title: {title!r}")
 
     body = {
         'snippet': {

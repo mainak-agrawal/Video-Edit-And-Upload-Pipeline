@@ -6,13 +6,48 @@ Automates merging multiple video clips with crossfade transitions, extracting a 
 
 ---
 
-## Prerequisites
+## Quick Start (Desktop App — No Python Required)
 
-### 1. Python
+The easiest way to use this project is through the pre-built desktop application.
+
+### Download
+
+Go to the [Releases](../../releases/latest) page and download `VideoEditPipeline.zip`.
+
+### Setup
+
+1. Extract the zip to any folder.
+2. Place your `client_secrets.json` in the **same folder** as `VideoEditPipeline.exe` (see [YouTube API credentials](#4-youtube-api-credentials-one-time-setup) below for how to obtain this).
+3. Ensure `ffmpeg` and `ffprobe` are on your system PATH (install via `choco install ffmpeg` or download from https://ffmpeg.org/download.html).
+
+### Usage
+
+1. Double-click `VideoEditPipeline.exe`.
+2. Enter the **YouTube video title** in the title field.
+3. Select (browse or drag-and-drop) three `.mp4` files:
+   - **1 — Intro** (e.g. title slide animation)
+   - **2 — Main Content** (e.g. the recorded lecture/video)
+   - **3 — Outro** (e.g. exit/thank-you slide)
+4. Click **▶ Run Pipeline**.
+5. The app will merge the videos with crossfade transitions, extract a thumbnail, and upload to YouTube — all with a live progress bar and log output.
+
+After completion, the final merged video is saved as `Final <name of your main content file>.mp4` in the same folder as the exe for review. The temporary copies (`1.mp4`, `2.mp4`, `3.mp4`) are cleaned up automatically.
+
+On first run of the upload step, a browser window will open for YouTube authorization. After that, `oauth_token.json` is saved next to the exe and reused.
+
+---
+
+## Alternative: Running Scripts Directly (Requires Python)
+
+If you prefer to run the Python scripts directly (or want to modify the pipeline), follow the setup below.
+
+### Prerequisites
+
+#### Python
 Install Python 3.8+ from https://www.python.org/downloads/  
 Make sure `python` is on your PATH (check the *"Add Python to PATH"* option during install).
 
-### 2. FFmpeg
+#### FFmpeg
 FFmpeg is used for all video processing.
 
 Install via [Chocolatey](https://chocolatey.org/install) (run in an elevated terminal):
@@ -23,23 +58,23 @@ choco install ffmpeg
 
 This automatically installs `ffmpeg` and `ffprobe` and adds them to your system PATH.
 
-### 3. Python dependencies
+#### Python dependencies
 Only required for the YouTube upload script:
 
 ```bat
-pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
+pip install -r requirements.txt
 ```
 
-### 4. YouTube API credentials (one-time setup)
-Required only for `upload-to-youtube.py` / `upload-to-youtube.bat`:
+#### YouTube API credentials (one-time setup)
+Required for both the desktop app and `upload-to-youtube.py`:
 
 1. Go to https://console.cloud.google.com/ and create or select a project.
 2. Enable the **YouTube Data API v3** for the project.
 3. Go to **APIs & Services → OAuth consent screen**. Set the app to **External** and add the Google account you want to upload from under **Test users**. (While the app is in testing mode, only listed test users can authorise it.)
 4. Go to **APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID**.
    - Application type: **Desktop app**
-5. Download the JSON file and save it as `client_secrets.json` in this folder.
-6. Run the upload script once — a browser window will open asking you to sign in and grant permission. After approval, `oauth_token.json` is saved locally and reused for future runs.
+5. Download the JSON file and save it as `client_secrets.json` in the same folder as the exe (or scripts).
+6. Run the upload step once — a browser window will open asking you to sign in and grant permission. After approval, `oauth_token.json` is saved locally and reused for future runs.
 
 > `client_secrets.json` and `oauth_token.json` are excluded from version control via `.gitignore`. Never commit these files.
 
@@ -84,7 +119,8 @@ Extracts a single frame from `1.mp4` at 85% through the clip as a high-quality P
 ### `upload-to-youtube.py`
 Uploads `final_output.mp4` to YouTube as a **private** video and sets `thumbnail.png` as the thumbnail.
 
-- The video title is automatically set to the name of the folder this script lives in (e.g. folder `My Trip 2025` → title `My Trip 2025`). Override with `TITLE_OVERRIDE` inside the script.
+- When run from the desktop app, the title is set via the UI text field.
+- When run standalone, the title comes from the `PIPELINE_TITLE` environment variable, `TITLE_OVERRIDE` in the script, or the containing folder name (in that priority order).
 - Uploaded with: empty description, no tags, not for kids, no age restriction.
 - Requires `client_secrets.json` and will create `oauth_token.json` on first run (see setup above).
 
