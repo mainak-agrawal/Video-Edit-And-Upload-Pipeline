@@ -69,7 +69,7 @@ def main():
     print("Building with PyInstaller...")
     print(f"Command: {' '.join(cmd)}\n")
     subprocess.run(cmd, check=True)
-    print("\n✓ Build complete! Output: dist/VideoEditPipeline/VideoEditPipeline.exe")
+    print("\nBuild complete! Output: dist/VideoEditPipeline/VideoEditPipeline.exe")
     print("  Place client_secrets.json (and oauth_token.json if you have one)")
     print("  in the dist/VideoEditPipeline/ folder before running.")
 
