@@ -59,6 +59,8 @@ import os
 import sys
 import json
 import time
+import re
+import unicodedata
 
 try:
     import googleapiclient.discovery
@@ -68,7 +70,7 @@ try:
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
 except ImportError:
-    sys.exit(
+    raise RuntimeError(
         "Missing dependencies. Run:\n"
         "  pip install google-api-python-client google-auth-oauthlib google-auth-httplib2"
     )
@@ -81,6 +83,31 @@ SCOPES = [
 ]
 
 CHUNK_SIZE = 8 * 1024 * 1024   # 8 MB resumable-upload chunks
+YOUTUBE_TITLE_MAX_LEN = 100
+
+
+def sanitize_youtube_title(raw_title: str) -> str:
+    """Normalize and validate a YouTube title so API upload does not fail."""
+    if raw_title is None:
+        raw_title = ''
+
+    # Normalize Unicode presentation forms (e.g. full-width punctuation)
+    title = unicodedata.normalize('NFKC', str(raw_title))
+
+    # Remove control/format/surrogate/private-use/unassigned code points.
+    title = ''.join(
+        ch for ch in title
+        if unicodedata.category(ch) not in {'Cc', 'Cf', 'Cs', 'Co', 'Cn'}
+    )
+
+    # Collapse all whitespace runs and trim edges.
+    title = re.sub(r'\s+', ' ', title).strip()
+
+    # YouTube title limit is 100 characters.
+    if len(title) > YOUTUBE_TITLE_MAX_LEN:
+        title = title[:YOUTUBE_TITLE_MAX_LEN].rstrip()
+
+    return title
 
 
 def get_authenticated_service():
@@ -95,19 +122,27 @@ def get_authenticated_service():
             creds.refresh(Request())
         else:
             if not os.path.exists(CLIENT_SECRETS):
-                sys.exit(
-                    f"ERROR: '{CLIENT_SECRETS}' not found.\n"
+                raise FileNotFoundError(
+                    f"'{CLIENT_SECRETS}' not found.\n"
                     "Download your OAuth 2.0 Desktop credentials JSON from "
                     "https://console.cloud.google.com/ and save it as "
                     f"'{CLIENT_SECRETS}' next to this script."
                 )
-            print("Opening browser for YouTube login ...")
+            print("No saved credentials found. Opening browser for YouTube login ...")
+            print("Please complete the sign-in in your browser window.")
             # OAUTHLIB_RELAX_TOKEN_SCOPE=1 tells requests-oauthlib not to raise
             # an error when Google returns a subset of the requested scopes.
             # This can happen in Testing mode where Google quietly narrows scopes.
             os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
             flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS, SCOPES)
-            creds = flow.run_local_server(port=0)
+            try:
+                creds = flow.run_local_server(port=0)
+            except Exception as e:
+                raise RuntimeError(
+                    f"OAuth login failed: {e}\n"
+                    "Make sure you can open a browser on this machine and "
+                    "complete the Google sign-in flow."
+                ) from e
 
         with open(TOKEN_FILE, 'w') as f:
             f.write(creds.to_json())
@@ -118,7 +153,7 @@ def get_authenticated_service():
 
 def upload_video(youtube):
     if not os.path.exists(VIDEO_FILE):
-        sys.exit(f"ERROR: Video file '{VIDEO_FILE}' not found.")
+        raise FileNotFoundError(f"Video file '{VIDEO_FILE}' not found.")
 
     file_size_mb = os.path.getsize(VIDEO_FILE) / (1024 * 1024)
     print(f"\nUploading '{VIDEO_FILE}'  ({file_size_mb:.1f} MB) ...")
@@ -126,12 +161,23 @@ def upload_video(youtube):
     # Derive title: env var > TITLE_OVERRIDE > folder name (fallback).
     env_title = os.environ.get('PIPELINE_TITLE', '').strip()
     if env_title:
-        title = env_title
+        raw_title = env_title
     elif TITLE_OVERRIDE:
-        title = TITLE_OVERRIDE
+        raw_title = TITLE_OVERRIDE
     else:
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        title = os.path.basename(script_dir)
+        raw_title = os.path.basename(script_dir)
+
+    title = sanitize_youtube_title(raw_title)
+
+    # Fallback to a deterministic safe title if the chosen title sanitizes to empty.
+    if not title:
+        title = sanitize_youtube_title(os.path.basename(os.path.dirname(os.path.abspath(__file__))))
+    if not title:
+        title = f"Upload {time.strftime('%Y-%m-%d %H-%M-%S')}"
+
+    if raw_title != title:
+        print(f"  Title normalized for YouTube: {title!r}")
     print(f"  Title: {title!r}")
 
     body = {

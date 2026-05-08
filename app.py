@@ -19,6 +19,8 @@ import os
 import io
 import shutil
 import threading
+import re
+import unicodedata
 from datetime import datetime
 
 from PySide6.QtWidgets import (
@@ -28,6 +30,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
+
+
+YOUTUBE_TITLE_MAX_LEN = 100
 
 
 # When frozen by PyInstaller, work from the directory containing the .exe.
@@ -158,6 +163,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Video Edit & Upload Pipeline")
         self.setMinimumSize(700, 650)
+        self._title_input_default_style = ""
 
         self._worker_thread = None
         self._signals = WorkerSignals()
@@ -186,7 +192,15 @@ class MainWindow(QMainWindow):
         self.title_input = QLineEdit()
         self.title_input.setPlaceholderText("Enter the YouTube video title...")
         self.title_input.setMinimumHeight(30)
+        self.title_input.textChanged.connect(self._on_title_changed)
         title_layout.addWidget(self.title_input)
+
+        self.title_error_label = QLabel("")
+        self.title_error_label.setStyleSheet("color: #d32f2f; font-size: 11px;")
+        self.title_error_label.setVisible(False)
+        title_layout.addWidget(self.title_error_label)
+
+        self._title_input_default_style = self.title_input.styleSheet()
         main_layout.addWidget(title_group)
 
         # ── File selection group ─────────────────────────────────────────────
@@ -261,10 +275,15 @@ class MainWindow(QMainWindow):
             self._append_log(f"[ERROR] Please select all 3 files. Missing: {', '.join(missing)}")
             return
 
-        title = self.title_input.text().strip()
-        if not title:
-            self._append_log("[ERROR] Please enter a title for the upload.")
+        title = self.title_input.text()
+        is_valid, title_error = self._validate_title(title)
+        if not is_valid:
+            self._set_title_error(title_error)
+            self._append_log(f"[ERROR] {title_error}")
             return
+
+        self._clear_title_error()
+        title = title.strip()
 
         # Disable button
         self.run_btn.setEnabled(False)
@@ -360,18 +379,20 @@ class MainWindow(QMainWindow):
                 os.rename(final_output, renamed)
                 self._signals.log_message.emit(f"Renamed final_output.mp4 → Final {original_name}.mp4")
 
-            # Clean up the temporary 1.mp4, 2.mp4, 3.mp4 copies
-            for name in ('1.mp4', '2.mp4', '3.mp4'):
-                tmp = os.path.join(SCRIPT_DIR, name)
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            self._signals.log_message.emit("Cleaned up temporary input copies (1/2/3.mp4)")
-
             self._signals.finished.emit(True, "Pipeline completed successfully!")
 
         except Exception as e:
             self._signals.finished.emit(False, f"Error: {e}")
         finally:
+            # Always clean up temporary 1.mp4, 2.mp4, 3.mp4 copies
+            for name in ('1.mp4', '2.mp4', '3.mp4'):
+                tmp = os.path.join(SCRIPT_DIR, name)
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
+            self._signals.log_message.emit("Cleaned up temporary input copies (1/2/3.mp4)")
             os.chdir(original_cwd if 'original_cwd' in dir() else SCRIPT_DIR)
 
     def _run_step_capturing_output(self, step_name: str, step_fn):
@@ -402,6 +423,11 @@ class MainWindow(QMainWindow):
         sys.stderr = stream
         try:
             step_fn()
+        except SystemExit as e:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+            if e.code and e.code != 0:
+                raise RuntimeError(f"{step_name} failed (exit code {e.code})") from e
         except Exception as e:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
@@ -410,6 +436,47 @@ class MainWindow(QMainWindow):
             stream.flush()
             sys.stdout = old_stdout
             sys.stderr = old_stderr
+
+    def _normalize_title_for_validation(self, title: str) -> str:
+        if title is None:
+            title = ""
+        normalized = unicodedata.normalize('NFKC', str(title))
+        normalized = ''.join(
+            ch for ch in normalized
+            if unicodedata.category(ch) not in {'Cc', 'Cf', 'Cs', 'Co', 'Cn'}
+        )
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        return normalized
+
+    def _validate_title(self, title: str):
+        normalized = self._normalize_title_for_validation(title)
+        if not normalized:
+            return False, "Please enter a valid upload title (not empty)."
+        if len(normalized) > YOUTUBE_TITLE_MAX_LEN:
+            return False, (
+                f"Title is too long ({len(normalized)} chars). "
+                f"YouTube allows up to {YOUTUBE_TITLE_MAX_LEN} characters."
+            )
+        return True, ""
+
+    def _set_title_error(self, message: str):
+        self.title_input.setStyleSheet(
+            "QLineEdit { border: 2px solid #d32f2f; border-radius: 4px; background-color: #ffebee; }"
+        )
+        self.title_error_label.setText(message)
+        self.title_error_label.setVisible(True)
+
+    def _clear_title_error(self):
+        self.title_input.setStyleSheet(self._title_input_default_style)
+        self.title_error_label.setVisible(False)
+        self.title_error_label.setText("")
+
+    def _on_title_changed(self, text: str):
+        is_valid, title_error = self._validate_title(text)
+        if is_valid:
+            self._clear_title_error()
+        else:
+            self._set_title_error(title_error)
 
     # ── Slots ────────────────────────────────────────────────────────────────
 
