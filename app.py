@@ -23,10 +23,12 @@ import re
 import unicodedata
 from datetime import datetime
 
+import json
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QProgressBar,
-    QGroupBox, QFrame, QLineEdit,
+    QGroupBox, QFrame, QLineEdit, QDialog, QDialogButtonBox, QCheckBox,
 )
 from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
@@ -41,6 +43,26 @@ if getattr(sys, 'frozen', False):
     SCRIPT_DIR = os.path.dirname(sys.executable)
 else:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+SETTINGS_FILE = os.path.join(SCRIPT_DIR, 'pipeline_settings.json')
+
+
+def _load_settings() -> dict:
+    """Load persisted settings from pipeline_settings.json."""
+    try:
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_settings(settings: dict) -> None:
+    """Persist settings to pipeline_settings.json."""
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(settings, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,12 +233,19 @@ class MainWindow(QMainWindow):
         self.drop1 = DropZone("1 — Intro")
         self.drop2 = DropZone("2 — Main Content")
         self.drop3 = DropZone("3 — Outro")
+        self.drop3.file_selected.connect(self._on_outro_selected)
 
         files_layout.addWidget(self.drop1)
         files_layout.addWidget(self.drop2)
         files_layout.addWidget(self.drop3)
 
         main_layout.addWidget(files_group)
+
+        # ── Pre-load saved default outro ─────────────────────────────────────
+        settings = _load_settings()
+        default_outro = settings.get('default_outro_path', '')
+        if default_outro and os.path.isfile(default_outro):
+            self.drop3._set_file(default_outro)
 
         # ── Run button ───────────────────────────────────────────────────────
         btn_layout = QHBoxLayout()
@@ -259,6 +288,44 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(log_group)
 
     # ── Actions ──────────────────────────────────────────────────────────────
+
+    def _on_outro_selected(self, path: str):
+        """Prompt user to save the chosen outro as the default."""
+        settings = _load_settings()
+        # Skip prompt if this path is already the saved default.
+        if settings.get('default_outro_path') == path:
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Save Default Outro")
+        dlg.setMinimumWidth(420)
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        info = QLabel(
+            f"<b>{os.path.basename(path)}</b><br>"
+            "<span style='color:#555;font-size:11px;'>"
+            f"{path}</span>"
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        checkbox = QCheckBox("Set this outro video as default for future sessions")
+        checkbox.setChecked(True)
+        layout.addWidget(checkbox)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted and checkbox.isChecked():
+            settings['default_outro_path'] = path
+            _save_settings(settings)
 
     def _run_pipeline(self):
         # Validate all files are selected
