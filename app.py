@@ -87,7 +87,7 @@ class DropZone(QFrame):
     def __init__(self, label_text: str, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.setMinimumHeight(80)
+        self.setMinimumHeight(110)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self._update_style(False)
 
@@ -186,7 +186,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Video Edit & Upload Pipeline")
-        self.setMinimumSize(700, 780)
+        self.setMinimumSize(700, 870)
         self._title_input_default_style = ""
 
         self._worker_thread = None
