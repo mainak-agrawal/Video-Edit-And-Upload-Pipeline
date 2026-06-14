@@ -35,6 +35,8 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
 
 
 YOUTUBE_TITLE_MAX_LEN = 100
+YOUTUBE_DESCRIPTION_MAX_BYTES = 5000
+YOUTUBE_DESCRIPTION_FORBIDDEN_CHARS = {'<', '>'}
 
 
 # When frozen by PyInstaller, work from the directory containing the .exe.
@@ -184,7 +186,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Video Edit & Upload Pipeline")
-        self.setMinimumSize(700, 650)
+        self.setMinimumSize(700, 780)
         self._title_input_default_style = ""
 
         self._worker_thread = None
@@ -224,6 +226,28 @@ class MainWindow(QMainWindow):
 
         self._title_input_default_style = self.title_input.styleSheet()
         main_layout.addWidget(title_group)
+
+        # ── Description input ─────────────────────────────────────────────
+        desc_group = QGroupBox("Description (Optional)")
+        desc_layout = QVBoxLayout(desc_group)
+        self.desc_input = QTextEdit()
+        self.desc_input.setPlaceholderText(
+            "Enter the YouTube video description... "
+            "(supports hashtags, links, emojis, etc.)"
+        )
+        self.desc_input.setMinimumHeight(80)
+        self.desc_input.setMaximumHeight(120)
+        self.desc_input.setFont(QFont("Segoe UI", 10))
+        self.desc_input.textChanged.connect(self._on_description_changed)
+        desc_layout.addWidget(self.desc_input)
+
+        self.desc_error_label = QLabel("")
+        self.desc_error_label.setStyleSheet("color: #d32f2f; font-size: 11px;")
+        self.desc_error_label.setVisible(False)
+        desc_layout.addWidget(self.desc_error_label)
+
+        self._desc_input_default_style = self.desc_input.styleSheet()
+        main_layout.addWidget(desc_group)
 
         # ── File selection group ─────────────────────────────────────────────
         files_group = QGroupBox("Select Input Videos")
@@ -349,7 +373,15 @@ class MainWindow(QMainWindow):
             self._append_log(f"[ERROR] {title_error}")
             return
 
+        description = self.desc_input.toPlainText()
+        desc_valid, desc_error = self._validate_description(description)
+        if not desc_valid:
+            self._set_desc_error(desc_error)
+            self._append_log(f"[ERROR] {desc_error}")
+            return
+
         self._clear_title_error()
+        self._clear_desc_error()
         title = title.strip()
 
         # Disable button
@@ -360,12 +392,12 @@ class MainWindow(QMainWindow):
         # Run in background thread
         self._worker_thread = threading.Thread(
             target=self._pipeline_worker,
-            args=(paths[0], paths[1], paths[2], title),
+            args=(paths[0], paths[1], paths[2], title, description),
             daemon=True,
         )
         self._worker_thread.start()
 
-    def _pipeline_worker(self, file1: str, file2: str, file3: str, title: str):
+    def _pipeline_worker(self, file1: str, file2: str, file3: str, title: str, description: str):
         """Runs in a background thread. Copies files, executes pipeline in-process."""
         try:
             self._signals.log_message.emit("Preparing input files...")
@@ -387,9 +419,6 @@ class MainWindow(QMainWindow):
                 shutil.copy2(src, dst)
 
             self._signals.progress.emit(10)
-
-            # Set title via environment variable for upload step
-            os.environ['PIPELINE_TITLE'] = title
 
             # Change to script directory so relative paths in modules work
             original_cwd = os.getcwd()
@@ -420,7 +449,8 @@ class MainWindow(QMainWindow):
             steps = [
                 ("Step 1 — Merge Videos", merge_videos.main, 30),
                 ("Step 2 — Extract Thumbnail", extract_thumbnail.main, 60),
-                ("Step 3 — Upload to YouTube", upload_to_youtube.main, 80),
+                ("Step 3 — Upload to YouTube",
+                 lambda: upload_to_youtube.main(title=title, description=description), 80),
             ]
 
             for step_name, step_fn, progress_pct in steps:
@@ -525,6 +555,44 @@ class MainWindow(QMainWindow):
                 f"YouTube allows up to {YOUTUBE_TITLE_MAX_LEN} characters."
             )
         return True, ""
+
+    def _validate_description(self, description: str):
+        if not description:
+            return True, ""
+        forbidden = [ch for ch in description if ch in YOUTUBE_DESCRIPTION_FORBIDDEN_CHARS]
+        if forbidden:
+            unique = sorted(set(forbidden))
+            return False, (
+                f"Description contains forbidden character(s): {' '.join(repr(c) for c in unique)}  "
+                f"(YouTube does not allow < or > in descriptions.)"
+            )
+        byte_len = len(description.encode('utf-8'))
+        if byte_len > YOUTUBE_DESCRIPTION_MAX_BYTES:
+            return False, (
+                f"Description is too long ({byte_len} bytes). "
+                f"YouTube allows up to {YOUTUBE_DESCRIPTION_MAX_BYTES} bytes."
+            )
+        return True, ""
+
+    def _set_desc_error(self, message: str):
+        self.desc_input.setStyleSheet(
+            "QTextEdit { border: 2px solid #d32f2f; border-radius: 4px; background-color: #ffebee; }"
+        )
+        self.desc_error_label.setText(message)
+        self.desc_error_label.setVisible(True)
+
+    def _clear_desc_error(self):
+        self.desc_input.setStyleSheet(self._desc_input_default_style)
+        self.desc_error_label.setVisible(False)
+        self.desc_error_label.setText("")
+
+    def _on_description_changed(self):
+        description = self.desc_input.toPlainText()
+        is_valid, desc_error = self._validate_description(description)
+        if is_valid:
+            self._clear_desc_error()
+        else:
+            self._set_desc_error(desc_error)
 
     def _set_title_error(self, message: str):
         self.title_input.setStyleSheet(

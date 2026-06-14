@@ -151,17 +151,16 @@ def get_authenticated_service():
     return googleapiclient.discovery.build('youtube', 'v3', credentials=creds)
 
 
-def upload_video(youtube):
+def upload_video(youtube, title=None, description=None):
     if not os.path.exists(VIDEO_FILE):
         raise FileNotFoundError(f"Video file '{VIDEO_FILE}' not found.")
 
     file_size_mb = os.path.getsize(VIDEO_FILE) / (1024 * 1024)
     print(f"\nUploading '{VIDEO_FILE}'  ({file_size_mb:.1f} MB) ...")
 
-    # Derive title: env var > TITLE_OVERRIDE > folder name (fallback).
-    env_title = os.environ.get('PIPELINE_TITLE', '').strip()
-    if env_title:
-        raw_title = env_title
+    # Derive title: argument > TITLE_OVERRIDE > folder name (fallback).
+    if title:
+        raw_title = title
     elif TITLE_OVERRIDE:
         raw_title = TITLE_OVERRIDE
     else:
@@ -180,10 +179,16 @@ def upload_video(youtube):
         print(f"  Title normalized for YouTube: {title!r}")
     print(f"  Title: {title!r}")
 
+    # Derive description: argument > module-level DESCRIPTION constant.
+    if description is None:
+        description = DESCRIPTION
+    if description:
+        print(f"  Description: {description[:80]!r}{'...' if len(description) > 80 else ''}")
+
     body = {
         'snippet': {
             'title':       title,
-            'description': DESCRIPTION,
+            'description': description,
             'tags':        TAGS,
             'categoryId':  CATEGORY_ID,
         },
@@ -257,7 +262,7 @@ def set_thumbnail(youtube, video_id):
     print("  Thumbnail set successfully.")
 
 
-def main():
+def main(title=None, description=None):
     print("=" * 60)
     print("YouTube Uploader")
     print("=" * 60)
@@ -268,11 +273,23 @@ def main():
     print("=" * 60)
 
     youtube   = get_authenticated_service()
-    video_id  = upload_video(youtube)
+    video_id  = upload_video(youtube, title=title, description=description)
     set_thumbnail(youtube, video_id)
 
     print(f"\nDone! Watch at: https://www.youtube.com/watch?v={video_id}")
 
 
 if __name__ == '__main__':
-    main()
+    # Interactive console input for standalone / .bat usage.
+    print("Enter video metadata (or press Enter to skip):")
+    print()
+    t = input("  Title: ").strip()
+    d_lines = []
+    print("  Description (press Enter twice to finish):")
+    while True:
+        line = input("    ")
+        if line == "":
+            break
+        d_lines.append(line)
+    d = "\n".join(d_lines)
+    main(title=t or None, description=d or None)
