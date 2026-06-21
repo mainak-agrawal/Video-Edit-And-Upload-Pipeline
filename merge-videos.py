@@ -27,6 +27,7 @@ TEMP_FILES = [
     'p3_head.mp4', 'part3_body.mp4',
     'trans_a.mp4', 'trans_b.mp4',
     'concat_list.txt', 'body2_concat.txt',
+    '2_cropped.mp4',
 ]
 
 
@@ -41,13 +42,22 @@ def run(cmd):
     subprocess.run([str(c) for c in cmd], check=True)
 
 
-def main():
+def main(crop_start=None, crop_end=None):
     missing = [f for f in ('1.mp4', '2.mp4', '3.mp4') if not os.path.exists(f)]
     if missing:
         raise FileNotFoundError(
             f"Missing input file(s): {', '.join(missing)}. "
             "Place all three video files in the same folder as this script."
         )
+
+    # ── Optional lightweight stream-copy crop of the main content video ──────────
+    if crop_start is not None and crop_end is not None:
+        print(f"Cropping 2.mp4 from {crop_start:.3f}s to {crop_end:.3f}s (stream copy) ...")
+        run(['ffmpeg', '-y',
+             '-ss', str(crop_start), '-to', str(crop_end),
+             '-i', '2.mp4', '-c', 'copy', '2_cropped.mp4'])
+        os.replace('2_cropped.mp4', '2.mp4')
+        print("Crop applied.")
 
     info1 = get_info('1.mp4')
     info2 = get_info('2.mp4')

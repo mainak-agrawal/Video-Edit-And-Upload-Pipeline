@@ -18,6 +18,7 @@ import sys
 import os
 import io
 import shutil
+import subprocess
 import threading
 import re
 import unicodedata
@@ -30,8 +31,8 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QFileDialog, QTextEdit, QProgressBar,
     QGroupBox, QFrame, QLineEdit, QDialog, QDialogButtonBox, QCheckBox,
 )
-from PySide6.QtCore import Qt, Signal, QObject
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
+from PySide6.QtCore import Qt, Signal, QObject, QPoint
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QPainter, QColor, QPen
 
 
 YOUTUBE_TITLE_MAX_LEN = 100
@@ -179,6 +180,411 @@ class DropZone(QFrame):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Range slider — two-handle slider for selecting a time range
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RangeSlider(QWidget):
+    """Horizontal slider with a left and right handle. Paints gray|green|gray."""
+
+    range_changed = Signal(float, float)  # start_seconds, end_seconds
+
+    _HANDLE_R = 8
+    _TRACK_H = 6
+    _MIN_GAP = 10.0   # handles may not come closer than this (seconds)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(28)
+        self.setMinimumWidth(120)
+        self._total = 0.0
+        self._start = 0.0
+        self._end = 0.0
+        self._dragging = None   # None | 'left' | 'right'
+
+    # ── public API ────────────────────────────────────────────────────────────
+
+    def set_duration(self, total_seconds: float):
+        self._total = float(total_seconds)
+        self._start = 0.0
+        self._end = self._total
+        self.update()
+        self.range_changed.emit(self._start, self._end)
+
+    @property
+    def start_seconds(self) -> float:
+        return self._start
+
+    @property
+    def end_seconds(self) -> float:
+        return self._end
+
+    def set_start(self, seconds: float):
+        if self._total <= 0:
+            return
+        s = max(0.0, min(float(seconds), self._end - self._MIN_GAP))
+        if abs(s - self._start) < 0.01:
+            return
+        self._start = s
+        self.update()
+        self.range_changed.emit(self._start, self._end)
+
+    def set_end(self, seconds: float):
+        if self._total <= 0:
+            return
+        e = min(self._total, max(float(seconds), self._start + self._MIN_GAP))
+        if abs(e - self._end) < 0.01:
+            return
+        self._end = e
+        self.update()
+        self.range_changed.emit(self._start, self._end)
+
+    # ── coordinate helpers ───────────────────────────────────────────────────
+
+    def _track_range(self):
+        r = self._HANDLE_R
+        return r, self.width() - r
+
+    def _seconds_to_x(self, sec: float) -> int:
+        x0, x1 = self._track_range()
+        if self._total <= 0:
+            return x0
+        return int(x0 + (sec / self._total) * (x1 - x0))
+
+    def _x_to_seconds(self, x: int) -> float:
+        x0, x1 = self._track_range()
+        span = x1 - x0
+        if span <= 0 or self._total <= 0:
+            return 0.0
+        return max(0.0, min(1.0, (x - x0) / span)) * self._total
+
+    # ── painting ─────────────────────────────────────────────────────────────
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        h = self.height()
+        r = self._HANDLE_R
+        th = self._TRACK_H
+        cy = h // 2
+        x0, x1 = self._track_range()
+        ty = cy - th // 2
+
+        if self._total <= 0:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor('#e0e0e0'))
+            p.drawRoundedRect(x0, ty, x1 - x0, th, th / 2, th / 2)
+            p.end()
+            return
+
+        lx = self._seconds_to_x(self._start)
+        rx = self._seconds_to_x(self._end)
+
+        p.setPen(Qt.PenStyle.NoPen)
+
+        # Left gray zone
+        if lx > x0:
+            p.setBrush(QColor('#bdbdbd'))
+            p.drawRoundedRect(x0, ty, lx - x0, th, th / 2, th / 2)
+
+        # Green (selected) zone
+        if rx > lx:
+            p.setBrush(QColor('#4caf50'))
+            p.drawRect(lx, ty, rx - lx, th)
+
+        # Right gray zone
+        if x1 > rx:
+            p.setBrush(QColor('#bdbdbd'))
+            p.drawRoundedRect(rx, ty, x1 - rx, th, th / 2, th / 2)
+
+        # Handles (white fill, dark border)
+        p.setPen(QPen(QColor('#424242'), 2))
+        p.setBrush(QColor('#ffffff'))
+        p.drawEllipse(QPoint(lx, cy), r, r)
+        p.drawEllipse(QPoint(rx, cy), r, r)
+
+        p.end()
+
+    # ── mouse interaction ─────────────────────────────────────────────────────
+
+    def mousePressEvent(self, event):
+        if self._total <= 0:
+            return
+        x = int(event.position().x())
+        lx = self._seconds_to_x(self._start)
+        rx = self._seconds_to_x(self._end)
+        hit = self._HANDLE_R + 4
+        dl, dr = abs(x - lx), abs(x - rx)
+        if dl <= hit and dr <= hit:
+            self._dragging = 'left' if dl <= dr else 'right'
+        elif dl <= hit:
+            self._dragging = 'left'
+        elif dr <= hit:
+            self._dragging = 'right'
+        if self._dragging:
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+
+    def mouseMoveEvent(self, event):
+        if not self._dragging or self._total <= 0:
+            return
+        sec = self._x_to_seconds(int(event.position().x()))
+        if self._dragging == 'left':
+            new_s = max(0.0, min(sec, self._end - self._MIN_GAP))
+            if abs(new_s - self._start) > 0.01:
+                self._start = new_s
+                self.update()
+                self.range_changed.emit(self._start, self._end)
+        else:
+            new_e = min(self._total, max(sec, self._start + self._MIN_GAP))
+            if abs(new_e - self._end) > 0.01:
+                self._end = new_e
+                self.update()
+                self.range_changed.emit(self._start, self._end)
+
+    def mouseReleaseEvent(self, _event):
+        self._dragging = None
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TimeControl — MM:SS display with minute/second increment buttons
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TimeControl(QWidget):
+    """
+    Layout: [▲/▼ min] [MM:SS display] [▲/▼ sec]
+    The display is read-only (no direct typing) but the cursor can be moved
+    inside it to reveal wide minute values.
+    """
+
+    time_changed = Signal(float)   # emits new time in seconds
+
+    _MIN_GAP = 10.0
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._seconds = 0.0
+        self._min_limit = 0.0
+        self._max_limit = 0.0
+        self._other_seconds = 0.0
+        self._is_start = True
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
+
+        # ── minute arrows ─────────────────────────────────────────────────
+        min_col = QVBoxLayout()
+        min_col.setSpacing(1)
+        min_col.setContentsMargins(0, 0, 0, 0)
+        self._min_up = QPushButton("▲")
+        self._min_down = QPushButton("▼")
+        for b in (self._min_up, self._min_down):
+            b.setFixedSize(22, 17)
+            b.setStyleSheet(
+                "font-size: 9px; padding: 0; "
+                "border: 1px solid #aaa; border-radius: 2px; background: #f0f0f0;"
+            )
+        self._min_up.clicked.connect(self._on_min_up)
+        self._min_down.clicked.connect(self._on_min_down)
+        min_col.addWidget(self._min_up)
+        min_col.addWidget(self._min_down)
+
+        # ── MM:SS display ─────────────────────────────────────────────────
+        self._display = QLineEdit("00:00")
+        self._display.setReadOnly(True)
+        self._display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Wide enough for 3-digit minutes ("999:59"), 4-digit accessible via cursor
+        self._display.setMinimumWidth(68)
+        self._display.setMaximumWidth(90)
+        self._display.setFixedHeight(38)
+        self._display.setStyleSheet("""
+            QLineEdit {
+                font-family: Consolas, monospace;
+                font-size: 13px;
+                background-color: #f5f5f5;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 0 4px;
+            }
+        """)
+
+        # ── second arrows ─────────────────────────────────────────────────
+        sec_col = QVBoxLayout()
+        sec_col.setSpacing(1)
+        sec_col.setContentsMargins(0, 0, 0, 0)
+        self._sec_up = QPushButton("▲")
+        self._sec_down = QPushButton("▼")
+        for b in (self._sec_up, self._sec_down):
+            b.setFixedSize(22, 17)
+            b.setStyleSheet(
+                "font-size: 9px; padding: 0; "
+                "border: 1px solid #aaa; border-radius: 2px; background: #f0f0f0;"
+            )
+        self._sec_up.clicked.connect(self._on_sec_up)
+        self._sec_down.clicked.connect(self._on_sec_down)
+        sec_col.addWidget(self._sec_up)
+        sec_col.addWidget(self._sec_down)
+
+        row.addLayout(min_col)
+        row.addWidget(self._display)
+        row.addLayout(sec_col)
+
+    # ── public API ────────────────────────────────────────────────────────────
+
+    def configure(self, is_start: bool, min_limit: float, max_limit: float):
+        self._is_start = is_start
+        self._min_limit = float(round(min_limit))
+        self._max_limit = float(round(max_limit))
+
+    def set_other(self, other_seconds: float):
+        self._other_seconds = float(round(other_seconds))
+
+    def set_seconds(self, seconds: float, emit: bool = True):
+        self._seconds = float(seconds)
+        self._refresh()
+        if emit:
+            self.time_changed.emit(self._seconds)
+
+    def get_seconds(self) -> float:
+        return self._seconds
+
+    # ── internals ─────────────────────────────────────────────────────────────
+
+    def _refresh(self):
+        total = int(round(self._seconds))
+        mins, secs = total // 60, total % 60
+        self._display.setText(f"{mins:02d}:{secs:02d}")
+
+    def _try_set(self, new_sec: float) -> bool:
+        ns = float(new_sec)
+        if ns < self._min_limit - 0.001 or ns > self._max_limit + 0.001:
+            return False
+        ns = max(self._min_limit, min(ns, self._max_limit))
+        if self._is_start:
+            if ns > self._other_seconds - self._MIN_GAP:
+                return False
+        else:
+            if ns < self._other_seconds + self._MIN_GAP:
+                return False
+        self.set_seconds(ns)
+        return True
+
+    def _on_min_up(self):
+        self._try_set(self._seconds + 60)
+
+    def _on_min_down(self):
+        self._try_set(self._seconds - 60)
+
+    def _on_sec_up(self):
+        cur = int(round(self._seconds))
+        # seconds field wraps 59→0 without affecting minutes
+        new_s = (cur % 60 + 1) % 60
+        self._try_set((cur // 60) * 60 + new_s)
+
+    def _on_sec_down(self):
+        cur = int(round(self._seconds))
+        # seconds field wraps 0→59 without affecting minutes
+        new_s = (cur % 60 - 1) % 60
+        self._try_set((cur // 60) * 60 + new_s)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CropControlWidget — combines TimeControl + RangeSlider + TimeControl
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CropControlWidget(QWidget):
+    """Full crop row: left TimeControl | RangeSlider | right TimeControl."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._total = 0.0
+        self._busy = False  # re-entrancy guard
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(4, 4, 4, 4)
+        row.setSpacing(10)
+
+        self._start_ctrl = TimeControl()
+        self._slider = RangeSlider()
+        self._end_ctrl = TimeControl()
+
+        row.addWidget(self._start_ctrl)
+        row.addWidget(self._slider, stretch=1)
+        row.addWidget(self._end_ctrl)
+
+        self._slider.range_changed.connect(self._on_slider_changed)
+        self._start_ctrl.time_changed.connect(self._on_start_ctrl_changed)
+        self._end_ctrl.time_changed.connect(self._on_end_ctrl_changed)
+
+    # ── public API ────────────────────────────────────────────────────────────
+
+    def set_duration(self, total_seconds: float):
+        self._total = float(total_seconds)
+        total_int = float(round(total_seconds))  # whole-second boundary for controls
+        self._busy = True
+        try:
+            self._slider.set_duration(self._total)
+            self._start_ctrl.configure(True, 0.0, total_int)
+            self._start_ctrl.set_other(total_int)
+            self._start_ctrl.set_seconds(0.0, emit=False)
+            self._end_ctrl.configure(False, 0.0, total_int)
+            self._end_ctrl.set_other(0.0)
+            self._end_ctrl.set_seconds(total_int, emit=False)
+        finally:
+            self._busy = False
+
+    def get_crop_start(self) -> float:
+        return self._slider.start_seconds
+
+    def get_crop_end(self) -> float:
+        return self._slider.end_seconds
+
+    def is_modified(self) -> bool:
+        """Returns True if the crop range differs from the full video defaults."""
+        return (self._slider.start_seconds > 0.5 or
+                abs(self._slider.end_seconds - self._total) > 0.5)
+
+    # ── slots ─────────────────────────────────────────────────────────────────
+
+    def _on_slider_changed(self, start: float, end: float):
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            self._start_ctrl.set_other(end)
+            self._start_ctrl.set_seconds(start, emit=False)
+            self._end_ctrl.set_other(start)
+            self._end_ctrl.set_seconds(end, emit=False)
+        finally:
+            self._busy = False
+
+    def _on_start_ctrl_changed(self, seconds: float):
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            self._end_ctrl.set_other(seconds)
+            self._slider.blockSignals(True)
+            self._slider.set_start(seconds)
+            self._slider.blockSignals(False)
+        finally:
+            self._busy = False
+
+    def _on_end_ctrl_changed(self, seconds: float):
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            self._start_ctrl.set_other(seconds)
+            self._slider.blockSignals(True)
+            self._slider.set_end(seconds)
+            self._slider.blockSignals(False)
+        finally:
+            self._busy = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -257,6 +663,7 @@ class MainWindow(QMainWindow):
         self.drop1 = DropZone("1 — Intro")
         self.drop2 = DropZone("2 — Main Content")
         self.drop3 = DropZone("3 — Outro")
+        self.drop2.file_selected.connect(self._on_main_video_selected)
         self.drop3.file_selected.connect(self._on_outro_selected)
 
         files_layout.addWidget(self.drop1)
@@ -264,6 +671,15 @@ class MainWindow(QMainWindow):
         files_layout.addWidget(self.drop3)
 
         main_layout.addWidget(files_group)
+
+        # ── Crop section (hidden until main video is loaded) ──────────────────
+        self._crop_group = QGroupBox("Crop Main Content Video (Optional)")
+        _crop_inner = QVBoxLayout(self._crop_group)
+        _crop_inner.setContentsMargins(8, 8, 8, 8)
+        self._crop_widget = CropControlWidget()
+        _crop_inner.addWidget(self._crop_widget)
+        self._crop_group.setVisible(False)
+        main_layout.addWidget(self._crop_group)
 
         # ── Pre-load saved default outro ─────────────────────────────────────
         settings = _load_settings()
@@ -351,6 +767,21 @@ class MainWindow(QMainWindow):
             settings['default_outro_path'] = path
             _save_settings(settings)
 
+    def _on_main_video_selected(self, path: str):
+        """Called when the main content video (2.mp4) is browsed/dropped.
+        Reads the video duration via ffprobe and shows the crop controls."""
+        try:
+            result = subprocess.check_output(
+                ['ffprobe', '-v', 'quiet', '-print_format', 'json',
+                 '-show_format', path],
+                stderr=subprocess.DEVNULL,
+            )
+            duration = float(json.loads(result.decode('utf-8'))['format']['duration'])
+            self._crop_widget.set_duration(duration)
+            self._crop_group.setVisible(True)
+        except Exception:
+            self._crop_group.setVisible(False)
+
     def _run_pipeline(self):
         # Validate all files are selected
         paths = [self.drop1.file_path, self.drop2.file_path, self.drop3.file_path]
@@ -384,20 +815,73 @@ class MainWindow(QMainWindow):
         self._clear_desc_error()
         title = title.strip()
 
+        # ── Crop confirmation ────────────────────────────────────────────────
+        crop_start: float | None = None
+        crop_end:   float | None = None
+        if self._crop_group.isVisible() and self._crop_widget.is_modified():
+            cs = self._crop_widget.get_crop_start()
+            ce = self._crop_widget.get_crop_end()
+
+            def _fmt(sec: float) -> str:
+                s = int(round(sec))
+                return f"{s // 60:02d}:{s % 60:02d}"
+
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Confirm Crop")
+            dlg.setMinimumWidth(420)
+            dlg_layout = QVBoxLayout(dlg)
+            dlg_layout.setSpacing(14)
+            dlg_layout.setContentsMargins(16, 16, 16, 16)
+
+            msg = QLabel(
+                f"Are you sure you want to upload the cropped video between "
+                f"<b>{_fmt(cs)}</b> and <b>{_fmt(ce)}</b>?"
+            )
+            msg.setWordWrap(True)
+            dlg_layout.addWidget(msg)
+
+            btn_row = QHBoxLayout()
+            btn_row.addStretch()
+            yes_btn = QPushButton("Yes, crop and upload")
+            yes_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1976d2; color: white;
+                    font-weight: bold; border-radius: 4px; padding: 6px 18px;
+                }
+                QPushButton:hover { background-color: #1565c0; }
+            """)
+            no_btn = QPushButton("No, cancel")
+            no_btn.setStyleSheet("padding: 6px 18px; border-radius: 4px;")
+            yes_btn.clicked.connect(dlg.accept)
+            no_btn.clicked.connect(dlg.reject)
+            btn_row.addWidget(yes_btn)
+            btn_row.addWidget(no_btn)
+            dlg_layout.addLayout(btn_row)
+
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return   # user pressed "No, cancel" — leave everything intact
+
+            crop_start = cs
+            crop_end = ce
+
         # Disable button
         self.run_btn.setEnabled(False)
         self.progress_bar.setValue(0)
         self.log_output.clear()
 
         # Run in background thread
+        _cs, _ce = crop_start, crop_end
         self._worker_thread = threading.Thread(
-            target=self._pipeline_worker,
-            args=(paths[0], paths[1], paths[2], title, description),
+            target=lambda: self._pipeline_worker(
+                paths[0], paths[1], paths[2], title, description,
+                crop_start=_cs, crop_end=_ce,
+            ),
             daemon=True,
         )
         self._worker_thread.start()
 
-    def _pipeline_worker(self, file1: str, file2: str, file3: str, title: str, description: str):
+    def _pipeline_worker(self, file1: str, file2: str, file3: str, title: str, description: str,
+                          crop_start: float | None = None, crop_end: float | None = None):
         """Runs in a background thread. Copies files, executes pipeline in-process."""
         try:
             self._signals.log_message.emit("Preparing input files...")
@@ -446,8 +930,10 @@ class MainWindow(QMainWindow):
             extract_thumbnail = _import_script('extract-thumbnail')
             upload_to_youtube = _import_script('upload-to-youtube')
 
+            _cs, _ce = crop_start, crop_end
             steps = [
-                ("Step 1 — Merge Videos", merge_videos.main, 30),
+                ("Step 1 — Merge Videos",
+                 lambda: merge_videos.main(crop_start=_cs, crop_end=_ce), 30),
                 ("Step 2 — Extract Thumbnail", extract_thumbnail.main, 60),
                 ("Step 3 — Upload to YouTube",
                  lambda: upload_to_youtube.main(title=title, description=description), 80),
